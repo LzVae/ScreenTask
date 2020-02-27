@@ -4,6 +4,7 @@ using System.ComponentModel;
 using System.Data;
 using System.Diagnostics;
 using System.Drawing;
+using System.Drawing.Drawing2D;
 using System.Drawing.Imaging;
 using System.IO;
 using System.Linq;
@@ -22,7 +23,7 @@ namespace ScreenTask
         private bool isWorking;
         private bool isTakingScreenshots;
         private bool isPrivateTask;
-        private bool isPreview;
+
         private bool isMouseCapture;
 
         private object locker = new object();
@@ -30,6 +31,10 @@ namespace ScreenTask
         private MemoryStream img;
         private List<Tuple<string, string>> _ips;
         HttpListener serv;
+
+        private List<string> usersum = new List<string>();
+
+
         public frmMain()
         {
             InitializeComponent();
@@ -38,8 +43,8 @@ namespace ScreenTask
             serv.IgnoreWriteExceptions = true; // Seems Had No Effect :(
             img = new MemoryStream();
             isPrivateTask = false;
-            isPreview = false;
-            isMouseCapture = false;
+
+            isMouseCapture = true;
         }
 
         private async void btnStartServer_Click(object sender, EventArgs e)
@@ -98,6 +103,33 @@ namespace ScreenTask
             while (isWorking)
             {
                 var ctx = await serv.GetContextAsync();
+                // 统计用户数量
+                if ((DateTime.Now.Second + 11) % 20 == 0)
+                {
+                    usersum.Clear();
+                }
+
+                if (ctx.Request.RemoteEndPoint != null)
+                {
+                    string ipAddress = ctx.Request.RemoteEndPoint.Address.ToString();
+                    if (!usersum.Contains(ipAddress))
+                    {
+                        usersum.Add(ipAddress);
+                    }
+                }
+
+                sumlog.Text = "当前在线用户数：" + usersum.Count() + "\r\n";
+                sumlog.Text += "IP分别为：" + "\r\n";
+
+                for (int i = 0; i < usersum.Count(); i++)
+                {
+                    sumlog.Text += usersum[i]  + "\r\n";
+                }
+
+
+
+
+
                 //Screenshot();
                 var resPath = ctx.Request.Url.LocalPath;
                 if (resPath == "/") // Route The Root Dir to the Index Page
@@ -214,23 +246,60 @@ namespace ScreenTask
 
             }
         }
+
+
+        private static ImageCodecInfo GetEncoderInfo(String mimeType)
+        {
+            int j;
+            ImageCodecInfo[] encoders;
+            encoders = ImageCodecInfo.GetImageEncoders();
+            for (j = 0; j < encoders.Length; ++j)
+            {
+                if (encoders[j].MimeType == mimeType)
+                    return encoders[j];
+            }
+            return null;
+        }
+
+
+  
+
+
+
         private void TakeScreenshot(bool captureMouse)
         {
             if (captureMouse)
             {
                 var bmp = ScreenCapturePInvoke.CaptureFullScreen(true);
                 rwl.AcquireWriterLock(Timeout.Infinite);
-                bmp.Save(Application.StartupPath + "/WebServer" + "/ScreenTask.jpg", ImageFormat.Jpeg);
+                
+                    ImageCodecInfo myImageCodecInfo;
+                    System.Drawing.Imaging.Encoder myEncoder;
+                    EncoderParameter myEncoderParameter;
+                    EncoderParameters myEncoderParameters;
+                    myImageCodecInfo = GetEncoderInfo("image/jpeg");
+                    myEncoder = System.Drawing.Imaging.Encoder.Quality;
+                    myEncoderParameters = new EncoderParameters(1);
+                    myEncoderParameter = new EncoderParameter(myEncoder, long.Parse(imglevel.Text));
+                    myEncoderParameters.Param[0] = myEncoderParameter;
+
+                    bmp.Save(Application.StartupPath + "/WebServer" + "/ScreenTask.jpg", myImageCodecInfo, myEncoderParameters);
+
+
+
                 rwl.ReleaseWriterLock();
-                if (isPreview)
-                {
-                    img = new MemoryStream();
-                    bmp.Save(img, ImageFormat.Jpeg);
-                    imgPreview.Image = new Bitmap(img);
-                }
+
+                bmp.Dispose();
+                bmp = null;
                 return;
-            }
+            }           
             Rectangle bounds = Screen.GetBounds(Point.Empty);
+            Graphics g1 = Graphics.FromHwnd(IntPtr.Zero);
+            //100%的时候，DPI是96；这条语句的作用时获取放大比例
+            float factor = g1.DpiX / 96;
+            bounds.Width = bounds.Width * (int)factor;
+            bounds.Height = bounds.Height * (int)factor;
+
             using (Bitmap bitmap = new Bitmap(bounds.Width, bounds.Height))
             {
                 using (Graphics g = Graphics.FromImage(bitmap))
@@ -238,15 +307,20 @@ namespace ScreenTask
                     g.CopyFromScreen(Point.Empty, Point.Empty, bounds.Size);
                 }
                 rwl.AcquireWriterLock(Timeout.Infinite);
-                bitmap.Save(Application.StartupPath + "/WebServer" + "/ScreenTask.jpg", ImageFormat.Jpeg);
+                ImageCodecInfo myImageCodecInfo;
+                System.Drawing.Imaging.Encoder myEncoder;
+                EncoderParameter myEncoderParameter;
+                EncoderParameters myEncoderParameters;
+                myImageCodecInfo = GetEncoderInfo("image/jpeg");
+                myEncoder = System.Drawing.Imaging.Encoder.Quality;
+                myEncoderParameters = new EncoderParameters(1);
+                myEncoderParameter = new EncoderParameter(myEncoder, long.Parse(imglevel.Text));
+                myEncoderParameters.Param[0] = myEncoderParameter;
+
+                bitmap.Save(Application.StartupPath + "/WebServer" + "/ScreenTask.jpg", myImageCodecInfo, myEncoderParameters);
                 rwl.ReleaseWriterLock();
 
-                if (isPreview)
-                {
-                    img = new MemoryStream();
-                    bitmap.Save(img, ImageFormat.Jpeg);
-                    imgPreview.Image = new Bitmap(img);
-                }
+                
 
 
             }
@@ -269,6 +343,17 @@ namespace ScreenTask
         private List<Tuple<string, string>> GetAllIPv4Addresses()
         {
             List<Tuple<string, string>> ipList = new List<Tuple<string, string>>();
+
+            string HostName = Dns.GetHostName(); //得到主机名
+            IPHostEntry IpEntry = Dns.GetHostEntry(HostName);
+            for (int i = 0; i < IpEntry.AddressList.Length; i++)
+            {
+                if (IpEntry.AddressList[i].AddressFamily == AddressFamily.InterNetwork)
+                {
+                    ipList.Add(Tuple.Create("这本地网络ipv4地址", IpEntry.AddressList[i].ToString()));
+                }
+            }
+
             foreach (var ni in NetworkInterface.GetAllNetworkInterfaces())
             {
 
@@ -280,6 +365,7 @@ namespace ScreenTask
                     }
                 }
             }
+            ipList.Sort();
             return ipList;
         }
         private Task AddFirewallRule(int port)
@@ -355,18 +441,7 @@ namespace ScreenTask
             }
         }
 
-        private void cbPreview_CheckedChanged(object sender, EventArgs e)
-        {
-            if (cbPreview.Checked == true)
-            {
-                isPreview = true;
-            }
-            else
-            {
-                isPreview = false;
-                imgPreview.Image = imgPreview.InitialImage;
-            }
-        }
+      
 
         private void cbCaptureMouse_CheckedChanged(object sender, EventArgs e)
         {
@@ -396,17 +471,7 @@ namespace ScreenTask
             comboIPs.SelectedIndex = comboIPs.Items.Count - 1;
         }
 
-        private void imgPreview_Click(object sender, EventArgs e)
-        {
-            if (imgPreview.Dock == DockStyle.None)
-            {
-                imgPreview.Dock = DockStyle.Fill;
-            }
-            else
-            {
-                imgPreview.Dock = DockStyle.None;
-            }
-        }
+     
 
         private void cbScreenshotEvery_CheckedChanged(object sender, EventArgs e)
         {
@@ -422,20 +487,33 @@ namespace ScreenTask
 
         private void lblWebsite_Click(object sender, EventArgs e)
         {
-            Process.Start("http://eslamx.com");
+            Process.Start("http://xy.zhuxindong.xyz");
         }
 
         private void lblMe_Click(object sender, EventArgs e)
         {
-            Process.Start("http://facebook.com/EslaMx7");
-            Process.Start("http://twitter.com/EslaMx7");
+            Process.Start("http://xy.zhuxindong.xyz");
+            Process.Start("http://xy.zhuxindong.xyz");
         }
 
         private void lblGithub_Click(object sender, EventArgs e)
         {
-            Process.Start("https://github.com/EslaMx7/ScreenTask");
+            Process.Start("http://xy.zhuxindong.xyz");
         }
 
+        private void numShotEvery_ValueChanged(object sender, EventArgs e)
+        {
 
+        }
+
+        private void label7_Click(object sender, EventArgs e)
+        {
+
+        }
+
+        private void numericUpDown1_ValueChanged(object sender, EventArgs e)
+        {
+
+        }
     }
 }
